@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Tetris RL Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #0c0c10;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+        }
+
+        .game-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        #game-canvas {
+            border: 2px solid #2b2d3a;
+            border-radius: 8px;
+            background: #0c0c10;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+
+        .game-info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #fff;
+            background: rgba(43, 45, 58, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            min-width: 200px;
+        }
+
+        .info-item {
+            margin: 8px 0;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .info-label {
+            color: #a0a0b0;
+        }
+
+        .info-value {
+            color: #fff;
+            font-weight: bold;
+        }
+
+        .game-over {
+            color: #ff6b6b;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <canvas id="game-canvas"></canvas>
+        <div class="game-info">
+            <div class="info-item">
+                <span class="info-label">得分:</span>
+                <span class="info-value" id="score">0</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">消除行数:</span>
+                <span class="info-value" id="lines">0</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">等级:</span>
+                <span class="info-value" id="level">1</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">状态:</span>
+                <span class="info-value" id="status">运行中</span>
+            </div>
+            <div id="game-over-indicator" style="display: none;">
+                <div class="info-item game-over">
+                    <span>游戏结束</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 游戏数据
+        const gameData = {{GAME_DATA}};
+        const config = {{CONFIG_DATA}};
+
+        // Canvas和上下文
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+
+        // 颜色定义
+        const colors = {
+            'I': '#00FFFF', 'O': '#FFFF00', 'T': '#FF00FF',
+            'L': '#FFA500', 'J': '#0000FF', 'S': '#00FF00', 'Z': '#FF0000',
+            'background': '#0c0c10',
+            'grid': '#2b2d3a',
+            'ghost': 'rgba(255, 255, 255, 0.2)',
+            'text': '#ffffff'
+        };
+
+        // 游戏状态
+        let currentState = gameData;
+        let cellSize = 30;
+
+        // 初始化
+        function init() {
+            resizeCanvas();
+            updateGameInfo();
+            render();
+
+            // 监听窗口大小变化
+            window.addEventListener('resize', resizeCanvas);
+
+            // 如果有WebSocket连接，可以在这里初始化
+            if (typeof WebSocket !== 'undefined') {
+                initWebSocket();
+            }
+        }
+
+        // 调整Canvas大小
+        function resizeCanvas() {
+            const container = canvas.parentElement;
+            const maxWidth = container.clientWidth - 40;
+            const maxHeight = container.clientHeight - 40;
+
+            // 保持10:20的宽高比（俄罗斯方块标准比例）
+            const widthBasedOnHeight = maxHeight * 0.5;
+            const heightBasedOnWidth = maxWidth * 2;
+
+            let width, height;
+            if (widthBasedOnHeight <= maxWidth) {
+                width = widthBasedOnHeight;
+                height = maxHeight;
+            } else {
+                width = maxWidth;
+                height = heightBasedOnWidth;
+            }
+
+            canvas.width = width;
+            canvas.height = height;
+            cellSize = width / 10;
+
+            render();
+        }
+
+        // 更新游戏信息显示
+        function updateGameInfo() {
+            document.getElementById('score').textContent = currentState.score;
+            document.getElementById('lines').textContent = currentState.lines;
+            document.getElementById('level').textContent = currentState.level;
+
+            const statusEl = document.getElementById('status');
+            const gameOverEl = document.getElementById('game-over-indicator');
+
+            if (currentState.gameOver) {
+                statusEl.textContent = '已结束';
+                statusEl.className = 'info-value game-over';
+                gameOverEl.style.display = 'block';
+            } else {
+                statusEl.textContent = '运行中';
+                statusEl.className = 'info-value';
+                gameOverEl.style.display = 'none';
+            }
+        }
+
+        // 渲染游戏
+        function render() {
+            if (!currentState.board || !ctx) return;
+
+            // 清空画布
+            ctx.fillStyle = colors.background;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 绘制网格
+            if (config.showGrid) {
+                ctx.strokeStyle = colors.grid;
+                ctx.lineWidth = 1;
+
+                // 垂直线
+                for (let x = 0; x <= 10; x++) {
+                    ctx.beginPath();
+                    ctx.moveTo(x * cellSize, 0);
+                    ctx.lineTo(x * cellSize, canvas.height);
+                    ctx.stroke();
+                }
+
+                // 水平线
+                for (let y = 0; y <= 20; y++) {
+                    ctx.beginPath();
+                    ctx.moveTo(0, y * cellSize);
+                    ctx.lineTo(canvas.width, y * cellSize);
+                    ctx.stroke();
+                }
+            }
+
+            // 绘制方块
+            for (let y = 0; y < currentState.board.length; y++) {
+                for (let x = 0; x < currentState.board[y].length; x++) {
+                    const pieceId = currentState.board[y][x];
+                    if (pieceId > 0) {
+                        drawBlock(x, y, pieceId);
+                    }
+                }
+            }
+
+            // 绘制当前方块（如果有）
+            if (currentState.currentPiece && config.showGhost) {
+                drawCurrentPiece();
+            }
+        }
+
+        // 绘制单个方块
+        function drawBlock(x, y, pieceId) {
+            const pieceName = pieceIdToName(pieceId);
+            const color = colors[pieceName] || colors['T'];
+
+            // 方块主体
+            ctx.fillStyle = color;
+            ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+
+            // 高光效果（左上角）
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.fillRect(x * cellSize, y * cellSize, cellSize * 0.2, cellSize);
+            ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize * 0.2);
+
+            // 阴影效果（右下角）
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.fillRect(x * cellSize + cellSize * 0.8, y * cellSize, cellSize * 0.2, cellSize);
+            ctx.fillRect(x * cellSize, y * cellSize + cellSize * 0.8, cellSize, cellSize * 0.2);
+
+            // 边框
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x * cellSize, y * cellSize, cellSize, cellSize);
+        }
+
+        // 绘制当前方块（幽灵方块）
+        function drawCurrentPiece() {
+            if (!currentState.currentPiece) return;
+
+            const [pieceId, rotation, x, y] = currentState.currentPiece;
+            const pieceName = pieceIdToName(pieceId);
+            const color = colors[pieceName] || colors['T'];
+
+            // 绘制幽灵方块（半透明）
+            ctx.fillStyle = colors.ghost;
+            ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+
+            // 绘制方块轮廓
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x * cellSize, y * cellSize, cellSize, cellSize);
+        }
+
+        // 方块ID转换为名称
+        function pieceIdToName(id) {
+            const mapping = {1: 'I', 2: 'O', 3: 'T', 4: 'L', 5: 'J', 6: 'S', 7: 'Z'};
+            return mapping[id] || 'T';
+        }
+
+        // 初始化WebSocket连接
+        function initWebSocket() {
+            const wsUrl = "{{WS_URL}}" || "ws://localhost:8765/ws/game";
+            try {
+                const ws = new WebSocket(wsUrl);
+
+                ws.onopen = function() {
+                    console.log('WebSocket连接已建立');
+                };
+
+                ws.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.type === 'game_update') {
+                            updateGameState(data.state);
+                        }
+                    } catch (e) {
+                        console.error('WebSocket消息解析失败:', e);
+                    }
+                };
+
+                ws.onerror = function(error) {
+                    console.error('WebSocket错误:', error);
+                };
+
+                ws.onclose = function() {
+                    console.log('WebSocket连接已关闭');
+                };
+            } catch (e) {
+                console.error('WebSocket初始化失败:', e);
+            }
+        }
+
+        // 更新游戏状态
+        function updateGameState(newState) {
+            currentState = {...currentState, ...newState};
+            updateGameInfo();
+            render();
+        }
+
+        // 页面加载完成后初始化
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>
